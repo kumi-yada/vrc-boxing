@@ -1,5 +1,7 @@
 ## Credits
 
+- Night Sky: https://gitlab.com/janmroz97/stars-skybox-shader
+
 - Player Only Mirror: https://booth.pm/en/items/2685621
 - QvPen: https://booth.pm/en/items/1555789
 - VizVid Player: https://booth.pm/en/items/5056077

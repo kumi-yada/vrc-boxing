@@ -1,4 +1,4 @@
-﻿
+﻿using TMPro;
 using UdonSharp;
 using UnityEngine;
 using VRC.SDKBase;
@@ -9,16 +9,42 @@ public class BoxStation : UdonSharpBehaviour
 {
     public BoxPad leftPad;
     public BoxPad rightPad;
+    public TextMeshProUGUI statusText;
+    public GameObject canvas;
 
+    public float sideSwitchChance = 0.8f;
+
+    [UdonSynced] public bool isInitialized = false;
     [UdonSynced] private bool isGameActive = false;
     [UdonSynced] private bool activeIsLeft = false;
-    
-    private PadPosition[] allPositions = new PadPosition[] { PadPosition.Jab, PadPosition.Cross, PadPosition.Hook };
+
+    private PadPosition[] allPositions = new PadPosition[] {
+        PadPosition.Jab, PadPosition.Jab, PadPosition.Jab,
+        PadPosition.Hook, PadPosition.Hook,
+        PadPosition.UpperCut,
+    };
 
     void Start()
     {
-        leftPad.InitializePad(PadPosition.Jab, true);
-        rightPad.InitializePad(PadPosition.Jab, false);
+        if (Networking.IsOwner(gameObject))
+        {
+            SetInitialized(false);
+            leftPad.InitializePad(PadPosition.Jab, true);
+            rightPad.InitializePad(PadPosition.Jab, false);
+        }
+    }
+
+    public void PrepareGame(VRCPlayerApi player)
+    {
+        if (isInitialized)
+            return;
+
+        statusText.text = "Player: " + player.displayName;
+        SetInitialized(true);
+        Networking.SetOwner(player, gameObject);
+        Networking.SetOwner(player, leftPad.gameObject);
+        Networking.SetOwner(player, rightPad.gameObject);
+        RequestSerialization();
     }
 
     public void StartGame(VRCPlayerApi player)
@@ -26,9 +52,9 @@ public class BoxStation : UdonSharpBehaviour
         if (isGameActive)
             return;
 
-        Debug.Log("Starting game with player: " + player.displayName);
-        Networking.SetOwner(player, gameObject);
+        statusText.text = "Starting game";
         isGameActive = true;
+        RequestSerialization();
 
         bool startLeft = Random.value > 0.5f;
         ShowPad(startLeft);
@@ -42,14 +68,11 @@ public class BoxStation : UdonSharpBehaviour
             return;
         }
 
-        if (activeIsLeft != isLeft)
-        {
-            Debug.Log("Hit on wrong pad. Force: " + force);
-            return;
-        }
+        if (activeIsLeft != isLeft) return;
 
-        Debug.Log((isLeft ? "Left" : "Right") + " pad hit with force: " + force);
-        ShowPad(activeIsLeft);
+        statusText.text = "Hit with force: " + force;
+        var toggle = Random.value < sideSwitchChance;
+        ShowPad(toggle ? !activeIsLeft : activeIsLeft);
     }
 
     private PadPosition RandomPosition()
@@ -76,4 +99,22 @@ public class BoxStation : UdonSharpBehaviour
             leftPad.SetPadActive(false);
         }
     }
+
+    private void SetInitialized(bool init)
+    {
+        isInitialized = init;
+        UpdateCanvasActive();
+        RequestSerialization();
+    }
+
+    public override void OnDeserialization()
+    {
+        UpdateCanvasActive();
+    }
+
+    private void UpdateCanvasActive()
+    {
+        canvas.SetActive(isInitialized);
+    }
+
 }

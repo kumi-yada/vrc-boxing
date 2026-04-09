@@ -7,20 +7,25 @@ using VRC.Udon;
 public enum PadPosition
 {
     Jab,
-    Cross,
     Hook,
+    UpperCut,
 }
 
 [UdonBehaviourSyncMode(BehaviourSyncMode.Manual)]
 public class BoxPad : UdonSharpBehaviour
 {
-
     public BoxStation station;
     public Transform jabPosition;
     public Transform hookPosition;
     public Transform cutPosition;
 
-    [UdonSynced] private bool isInitialized = false;
+    public AudioSource hitSound;
+    public float minPitch = 0.8f;
+    public float maxPitch = 1.2f;
+    public float minVolume = 0.8f;
+    public float maxVolume = 1.2f;
+    public float maxForceForSound = 0.5f;
+
     [UdonSynced] private bool isActivated = false;
     [UdonSynced] private PadPosition padPosition = PadPosition.Jab;
 
@@ -40,50 +45,27 @@ public class BoxPad : UdonSharpBehaviour
         MovePad(position);
     }
 
-    public void MovePad(PadPosition position)
-    {
-        Debug.Log("Moving " + (isLeftPad ? "left" : "right") + " pad to position: " + position);
-        padPosition = position;
-        UpdatePadPosition();
-        RequestSerialization();
-    }
-
-    public void SetPadActive(bool active)
-    {
-        Debug.Log("Setting " + (isLeftPad ? "left" : "right") + " pad active: " + active);
-        isActivated = active;
-        UpdateActiveState();
-        RequestSerialization();
-    }
-
-    private void SetPadOwnerTo(Collider collider)
-    {
-        var gloveOwner = Networking.GetOwner(collider.gameObject);
-        Networking.SetOwner(gloveOwner, gameObject);
-        isInitialized = true;
-        Debug.Log("Pad initialized with owner: " + gloveOwner.displayName);
-        RequestSerialization();
-    }
-
     private void OnTriggerEnter(Collider other)
     {
         if (other == null || station == null) return;
 
+        var gloveOwner = Networking.GetOwner(other.gameObject);
+        if (gloveOwner != Networking.LocalPlayer)
+            return;
+
         string otherName = other.gameObject.name;
         bool isLeftHit = isLeftPad && otherName == "GloveL";
         bool isRightHit = !isLeftPad && otherName == "GloveR";
-        Debug.Log(gameObject.name + " triggered by " + otherName + ". Left hit: " + isLeftHit + ", Right hit: " + isRightHit);
         if (!(isLeftHit || isRightHit))
             return;
 
-        if (!isInitialized)
+        if (!station.isInitialized)
         {
-            SetPadOwnerTo(other);
+            station.PrepareGame(gloveOwner);
             return;
         }
 
         if (!Networking.IsOwner(gameObject)) {
-            Debug.Log("Not owner of pad, ignoring collision from " + Networking.LocalPlayer.displayName);
             return;
         }
 
@@ -91,6 +73,15 @@ public class BoxPad : UdonSharpBehaviour
         if (force > 0f)
         {
             station.PadHit(isLeftPad, force);
+
+            if (hitSound != null)
+            {
+                float pitch = Random.Range(minPitch, maxPitch);
+                float volume = Mathf.Lerp(minVolume, maxVolume, force / maxForceForSound);
+                hitSound.pitch = pitch;
+                hitSound.volume = volume;
+                hitSound.Play();
+            }
         }
     }
 
@@ -111,7 +102,7 @@ public class BoxPad : UdonSharpBehaviour
 
         // Only count hits where the local direction is facing the negative X axis (left).
         // Use dot product with Vector3.left; require a reasonable alignment threshold.
-        const float facingThreshold = 0.8f;
+        const float facingThreshold = 0.5f;
 
         if (overlapping && distance > 0f && dotLeft > facingThreshold)
         {
@@ -119,6 +110,20 @@ public class BoxPad : UdonSharpBehaviour
         }
 
         return 0f;
+    }
+
+    public void MovePad(PadPosition position)
+    {
+        padPosition = position;
+        UpdatePadPosition();
+        RequestSerialization();
+    }
+
+    public void SetPadActive(bool active)
+    {
+        isActivated = active;
+        UpdateActiveState();
+        RequestSerialization();
     }
 
     public override void OnDeserialization()
@@ -140,7 +145,7 @@ public class BoxPad : UdonSharpBehaviour
                 transform.position = jabPosition.position;
                 transform.rotation = jabPosition.rotation;
                 break;
-            case PadPosition.Cross:
+            case PadPosition.UpperCut:
                 transform.position = cutPosition.position;
                 transform.rotation = cutPosition.rotation;
                 break;
