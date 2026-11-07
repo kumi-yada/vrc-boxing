@@ -24,14 +24,13 @@ public class BoxPad : UdonSharpBehaviour
     public float maxPitch = 1.2f;
     public float minVolume = 0.8f;
     public float maxVolume = 1.2f;
-    public float maxForceForSound = 0.5f;
+    public float maxForceForSound = 8f; // m/s mapping to full volume (kept for the clip source)
 
     [UdonSynced] private bool isActivated = false;
     [UdonSynced] private PadPosition padPosition = PadPosition.Jab;
 
     private bool isLeftPad = false;
     private Collider padCollider;
-    private const float forceScale = 100f;
 
     void Start()
     {
@@ -45,71 +44,35 @@ public class BoxPad : UdonSharpBehaviour
         MovePad(position);
     }
 
-    private void OnTriggerEnter(Collider other)
+    public Collider GetPadCollider()
     {
-        if (other == null || station == null) return;
+        if (padCollider == null) padCollider = GetComponent<Collider>();
+        return padCollider;
+    }
 
-        var gloveOwner = Networking.GetOwner(other.gameObject);
-        if (gloveOwner != Networking.LocalPlayer)
-            return;
+    public PadPosition GetPadPosition() { return padPosition; }
+    public bool IsLeftPad() { return isLeftPad; }
 
-        string otherName = other.gameObject.name;
-        bool isLeftHit = isLeftPad && otherName == "GloveL";
-        bool isRightHit = !isLeftPad && otherName == "GloveR";
-        if (!(isLeftHit || isRightHit))
-            return;
+    // Called by PunchSystem's swept hit detector on the punching player's
+    // client. Replaces the old OnTriggerEnter, which could miss fast punches
+    // (tunneling) and could double-count one swing.
+    public void NotifyPunchHit(bool isLeftHand, float speed, float score, PunchQuality quality)
+    {
+        if (station == null) return;
+        if (isLeftPad != isLeftHand) return;
 
         if (!station.isInitialized)
         {
-            station.PrepareGame(gloveOwner);
+            station.PrepareGame(Networking.LocalPlayer);
             return;
         }
 
-        if (!Networking.IsOwner(gameObject)) {
+        if (!Networking.IsOwner(gameObject))
             return;
-        }
 
-        float force = CalculateHitForce(other);
-        if (force > 0f)
-        {
-            station.PadHit(isLeftPad, force);
-
-            if (hitSound != null)
-            {
-                float pitch = Random.Range(minPitch, maxPitch);
-                float volume = Mathf.Lerp(minVolume, maxVolume, force / maxForceForSound);
-                hitSound.pitch = pitch;
-                hitSound.volume = volume;
-                hitSound.Play();
-            }
-        }
-    }
-
-    private float CalculateHitForce(Collider other)
-    {
-        Vector3 direction;
-        float distance;
-        bool overlapping = Physics.ComputePenetration(
-            other, other.transform.position, other.transform.rotation,
-            padCollider, transform.position, transform.rotation,
-            out direction, out distance
-        );
-
-        // convert the penetration direction (world space) into the pad's local space
-        Vector3 localDirection = transform.InverseTransformDirection(direction);
-        float dotLeft = Vector3.Dot(localDirection.normalized, Vector3.left);
-        Debug.Log("Hit force calculation. Direction (local): " + localDirection + ", Distance: " + distance + ", DotLeft: " + dotLeft);
-
-        // Only count hits where the local direction is facing the negative X axis (left).
-        // Use dot product with Vector3.left; require a reasonable alignment threshold.
-        const float facingThreshold = 0.5f;
-
-        if (overlapping && distance > 0f && dotLeft > facingThreshold)
-        {
-            return distance * forceScale;
-        }
-
-        return 0f;
+        station.PadHit(isLeftPad, speed);
+        // impact sound is played by PunchFeedback at the hit point for every
+        // target (loudness/pitch follow punch speed), so it is not played here
     }
 
     public void MovePad(PadPosition position)
