@@ -1,6 +1,6 @@
 using UnityEngine;
 
-// Classifies a punch from the fist's travel direction over the impact window:
+// Classifies a punch from the fist's travel direction over the final stretch of the swing:
 //   mostly upward              -> Uppercut
 //   horizontal, toward target  -> Jab
 //   horizontal, from the side  -> Hook

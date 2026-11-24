@@ -7,7 +7,7 @@ using VRC.SDKBase;
 // Attach to any object the player can punch. On each client it watches the
 // local player's two hand bones: a swept sphere along the prev->cur fist
 // segment detects the hit (substepped at half the fist radius, so no
-// tunneling), the fist travel over the last `classifyWindow` seconds is
+// tunneling), the fist travel over the last `classifyDistance` meters is
 // classified as jab/hook/uppercut, and the hit registers: squash animation +
 // haptic pulse on the puncher, plus the last punch written to `readout`.
 [UdonBehaviourSyncMode(BehaviourSyncMode.Manual)]
@@ -22,8 +22,8 @@ public class PunchTarget : UdonSharpBehaviour
     public float hitCooldown = 0.25f;  // s, per hand: one swing = one hit
 
     [Header("Classification")]
-    public float classifyWindow = 0.15f; // s of fist travel used to classify the punch
-    public int historySize = 12;         // ring-buffer samples kept per hand
+    public float classifyDistance = 0.10f; // m of fist travel at the end of the swing used to classify the punch
+    public int historySize = 12;           // ring-buffer samples kept per hand
 
     private Collider hitCollider;
     private Vector3 baseScale;
@@ -102,9 +102,15 @@ public class PunchTarget : UdonSharpBehaviour
             Vector3 p = prev + dir * (travel * s / steps);
             if (!OverlapsAt(p)) continue;
 
-            Vector3 travelWin = fist - SampleAtOrBefore(h, now - classifyWindow);
-            if (travelWin.magnitude < 0.03f) travelWin = delta;
-            float speed = Mathf.Max(speedNow, travelWin.magnitude / classifyWindow);
+            float segStart;
+            Vector3 travelWin = fist - SampleBackByDistance(h, classifyDistance, out segStart);
+            float segTime = now - segStart;
+            if (travelWin.magnitude < 0.03f)
+            {
+                travelWin = delta;
+                segTime = dt;
+            }
+            float speed = Mathf.Max(speedNow, travelWin.magnitude / Mathf.Max(segTime, 0.001f));
             PunchType type = PunchClassifier.Classify(travelWin,
                 player.GetBonePosition(HumanBodyBones.Head), p);
 
@@ -143,20 +149,26 @@ public class PunchTarget : UdonSharpBehaviour
         histTime[h][histHead[h]] = t;
     }
 
-    // newest sample that is not newer than t; oldest sample if t predates all of them
-    private Vector3 SampleAtOrBefore(int h, float t)
+    // walks the ring buffer back along the fist path until `dist` meters of travel
+    // are covered; falls back to the oldest sample if the buffer is shorter
+    private Vector3 SampleBackByDistance(int h, float dist, out float t)
     {
         int count = histCount[h];
         int len = histPos[h].Length;
-        for (int age = 0; age < count; age++)
+        int i = histHead[h];
+        Vector3 pos = histPos[h][i];
+        t = histTime[h][i];
+        float acc = 0f;
+        for (int age = 1; age < count; age++)
         {
-            int i = histHead[h] - age;
-            while (i < 0) i += len;
-            if (histTime[h][i] <= t) return histPos[h][i];
+            int j = i - age;
+            while (j < 0) j += len;
+            acc += Vector3.Distance(histPos[h][j], pos);
+            pos = histPos[h][j];
+            t = histTime[h][j];
+            if (acc >= dist) break;
         }
-        int oi = histHead[h] - (count - 1);
-        while (oi < 0) oi += len;
-        return histPos[h][oi];
+        return pos;
     }
 
     private void AnimateSquash()

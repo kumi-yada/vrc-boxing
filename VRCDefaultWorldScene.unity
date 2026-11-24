@@ -260,7 +260,7 @@ MonoBehaviour:
   fistRadius: 0.1
   minPunchSpeed: 0.5
   hitCooldown: 0.25
-  classifyWindow: 0.15
+  classifyDistance: 0.1
   historySize: 12
 --- !u!114 &70587997
 MonoBehaviour:
