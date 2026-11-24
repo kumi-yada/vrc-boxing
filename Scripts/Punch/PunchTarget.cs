@@ -10,11 +10,20 @@ using VRC.SDKBase;
 // tunneling), the fist travel over the last `classifyDistance` meters is
 // classified as jab/hook/uppercut, and the hit registers: squash animation +
 // haptic pulse on the puncher, plus the last punch written to `readout`.
+// A hit can also be forwarded to a configurable event receiver
+// (hitEventReceiver/hitEventName); LastPunch* is set just before it fires.
 [UdonBehaviourSyncMode(BehaviourSyncMode.Manual)]
 public class PunchTarget : UdonSharpBehaviour
 {
     public string label = "";   // readout name; empty falls back to the GameObject name
     public TMP_Text readout;    // optional; last punch is written here
+
+    [Header("Hit hook")]
+    public UdonSharpBehaviour hitEventReceiver;   // optional; receives hitEventName on each hit
+    public string hitEventName = "OnPunchTargetHit";
+    public PunchType LastPunchType = PunchType.None; // set just before the hook fires
+    public float LastPunchSpeed = 0f;
+    public bool LastPunchWasLeft = false;
 
     [Header("Detection")]
     public float fistRadius = 0.10f;   // m, swept-sphere radius of a fist
@@ -25,6 +34,10 @@ public class PunchTarget : UdonSharpBehaviour
     public float classifyDistance = 0.10f; // m of fist travel at the end of the swing used to classify the punch
     public int historySize = 12;           // ring-buffer samples kept per hand
 
+    [Header("Squash")]
+    public float squashAmount = 0.35f; // peak y/z shrink on hit; x bulges proportionally
+
+    private const float SquashWidthRatio = 0.9f / 0.35f;
     private Collider hitCollider;
     private Vector3 baseScale;
     private float squash = 1f;
@@ -46,6 +59,7 @@ public class PunchTarget : UdonSharpBehaviour
         if (string.IsNullOrEmpty(label)) label = gameObject.name;
         baseScale = transform.localScale;
         if (historySize < 4) historySize = 4;
+        squashAmount = Mathf.Clamp01(squashAmount);
         histPos = new Vector3[2][];
         histTime = new float[2][];
         for (int h = 0; h < 2; h++)
@@ -123,6 +137,11 @@ public class PunchTarget : UdonSharpBehaviour
 
     private void OnPunchHit(VRCPlayerApi player, bool isLeft, PunchType type, float speed)
     {
+        LastPunchType = type;
+        LastPunchSpeed = speed;
+        LastPunchWasLeft = isLeft;
+        if (hitEventReceiver != null && !string.IsNullOrEmpty(hitEventName))
+            hitEventReceiver.SendCustomEvent(hitEventName);
         squash = 0f;
         player.PlayHapticEventInHand(
             isLeft ? VRC_Pickup.PickupHand.Left : VRC_Pickup.PickupHand.Right,
@@ -177,8 +196,8 @@ public class PunchTarget : UdonSharpBehaviour
         squash = Mathf.Min(1f, squash + Time.deltaTime * 5f);
         float k = Mathf.Sin(squash * Mathf.PI); // 0 -> 1 -> 0
         transform.localScale = new Vector3(
-            baseScale.x * (1f + 0.9f * k),
-            baseScale.y * (1f - 0.35f * k),
-            baseScale.z * (1f - 0.35f * k));
+            baseScale.x * (1f + squashAmount * SquashWidthRatio * k),
+            baseScale.y * (1f - squashAmount * k),
+            baseScale.z * (1f - squashAmount * k));
     }
 }
