@@ -1,141 +1,67 @@
-
 using TMPro;
 using UdonSharp;
 using UnityEngine;
 using VRC.SDKBase;
 
-// Attach to any object the player can punch. On each client it watches the
-// local player's two hand bones: a swept sphere along the prev->cur fist
-// segment detects the hit (substepped at half the fist radius, so no
-// tunneling), the fist travel over the last `classifyDistance` meters is
-// classified as jab/hook/uppercut, and the hit registers: squash animation +
-// haptic pulse on the puncher, plus the last punch written to `readout`.
-// A hit can also be forwarded to a configurable event receiver
-// (hitEventReceiver/hitEventName); LastPunch* is set just before it fires.
+// Attach to any object the player can punch. A target only owns its collider,
+// squash animation, hit hook and last-punch readout. All fist tracking and hit
+// detection runs once per frame in the scene's single PunchDetector, which
+// calls NotifyPunchHit when a swing connects; LastPunch* is set just before
+// hitEventReceiver / hitEventName fires.
 [UdonBehaviourSyncMode(BehaviourSyncMode.Manual)]
 public class PunchTarget : UdonSharpBehaviour
 {
-    public string label = "";   // readout name; empty falls back to the GameObject name
     public TMP_Text readout;    // optional; last punch is written here
 
     [Header("Hit hook")]
     public UdonSharpBehaviour hitEventReceiver;   // optional; receives hitEventName on each hit
     public string hitEventName = "OnPunchTargetHit";
-    public PunchType LastPunchType = PunchType.None; // set just before the hook fires
-    public float LastPunchSpeed = 0f;
-    public bool LastPunchWasLeft = false;
-
-    [Header("Detection")]
-    public float fistRadius = 0.10f;   // m, swept-sphere radius of a fist
-    public float minPunchSpeed = 0.5f; // m/s; below this a touch is not a punch
-    public float hitCooldown = 0.25f;  // s, per hand: one swing = one hit
-
-    [Header("Classification")]
-    public float classifyDistance = 0.10f; // m of fist travel at the end of the swing used to classify the punch
-    public int historySize = 12;           // ring-buffer samples kept per hand
+    [HideInInspector] public PunchType LastPunchType = PunchType.None; // set just before the hook fires
+    [HideInInspector] public float LastPunchSpeed = 0f;
+    [HideInInspector] public bool LastPunchWasLeft = false;
 
     [Header("Squash")]
     public float squashAmount = 0.35f; // peak y/z shrink on hit; x bulges proportionally
+
+    // per-hand latch/cooldown, driven by PunchDetector; one swing = one hit on this target
+    [HideInInspector] public bool[] latched = new bool[2];
+    [HideInInspector] public float[] cooldownUntil = new float[2];
 
     private const float SquashWidthRatio = 0.9f / 0.35f;
     private Collider hitCollider;
     private Vector3 baseScale;
     private float squash = 1f;
-
-    // per-hand state; index 0 = left, 1 = right
-    private Vector3[] prevPos = new Vector3[2];
-    private bool[] hasPrev = new bool[2];
-    private float[] cooldownUntil = new float[2];
-    private bool[] latched = new bool[2];
-    private Vector3[][] histPos;
-    private float[][] histTime;
-    private int[] histHead = new int[2];
-    private int[] histCount = new int[2];
-    private Collider[] overlapBuf = new Collider[8];
+    private PunchDetector detector;
 
     void Start()
     {
         hitCollider = GetComponent<Collider>();
-        if (string.IsNullOrEmpty(label)) label = gameObject.name;
         baseScale = transform.localScale;
-        if (historySize < 4) historySize = 4;
         squashAmount = Mathf.Clamp01(squashAmount);
-        histPos = new Vector3[2][];
-        histTime = new float[2][];
-        for (int h = 0; h < 2; h++)
-        {
-            histPos[h] = new Vector3[historySize];
-            histTime[h] = new float[historySize];
-        }
+        // typeof(userType) is not supported by UdonSharp, so find the detector
+        // by GameObject name and use the generic GetComponent instead
+        GameObject detectorGO = GameObject.Find("PunchDetector");
+        if (detectorGO != null) detector = detectorGO.GetComponent<PunchDetector>();
+        if (detector != null)
+            detector.Register(this);
+        else
+            Debug.LogWarning("[PunchTarget] No PunchDetector in the scene; punches on " + gameObject.name + " are disabled");
+    }
+
+    void OnDestroy()
+    {
+        if (detector != null) detector.Unregister(this);
     }
 
     void Update()
     {
         AnimateSquash();
-        VRCPlayerApi player = Networking.LocalPlayer;
-        if (player == null || hitCollider == null || !hitCollider.enabled) return;
-        CheckHand(player, 0, player.GetBonePosition(HumanBodyBones.LeftHand));
-        CheckHand(player, 1, player.GetBonePosition(HumanBodyBones.RightHand));
     }
 
-    private void CheckHand(VRCPlayerApi player, int h, Vector3 fist)
-    {
-        float now = Time.time;
-        float dt = Time.deltaTime;
-        if (dt <= 0f) dt = 0.016f;
+    public Collider GetHitCollider() { return hitCollider; }
 
-        PushHistory(h, fist, now);
-
-        if (!hasPrev[h])
-        {
-            prevPos[h] = fist;
-            hasPrev[h] = true;
-            return;
-        }
-
-        Vector3 prev = prevPos[h];
-        Vector3 delta = fist - prev;
-        float travel = delta.magnitude;
-        prevPos[h] = fist;
-
-        // one swing = one hit: stay latched until the fist leaves this target
-        if (latched[h])
-        {
-            if (OverlapsAt(fist)) return;
-            latched[h] = false;
-        }
-        if (now < cooldownUntil[h]) return;
-        if (travel < 0.0005f) return;
-        float speedNow = travel / dt;
-        if (speedNow < minPunchSpeed) return;
-
-        Vector3 dir = delta / travel;
-        int steps = Mathf.Clamp(Mathf.CeilToInt(travel / (fistRadius * 0.5f)), 1, 12);
-        for (int s = 1; s <= steps; s++)
-        {
-            Vector3 p = prev + dir * (travel * s / steps);
-            if (!OverlapsAt(p)) continue;
-
-            float segStart;
-            Vector3 travelWin = fist - SampleBackByDistance(h, classifyDistance, out segStart);
-            float segTime = now - segStart;
-            if (travelWin.magnitude < 0.03f)
-            {
-                travelWin = delta;
-                segTime = dt;
-            }
-            float speed = Mathf.Max(speedNow, travelWin.magnitude / Mathf.Max(segTime, 0.001f));
-            PunchType type = PunchClassifier.Classify(travelWin,
-                player.GetBonePosition(HumanBodyBones.Head), p);
-
-            latched[h] = true;
-            cooldownUntil[h] = now + hitCooldown;
-            OnPunchHit(player, h == 0, type, speed);
-            return;
-        }
-    }
-
-    private void OnPunchHit(VRCPlayerApi player, bool isLeft, PunchType type, float speed)
+    // Called by PunchDetector when a swing connects with this target.
+    public void NotifyPunchHit(VRCPlayerApi player, bool isLeft, PunchType type, float speed)
     {
         LastPunchType = type;
         LastPunchSpeed = speed;
@@ -148,46 +74,7 @@ public class PunchTarget : UdonSharpBehaviour
             0.1f, Mathf.Clamp01(speed / 8f), 0.5f);
         if (readout != null)
             readout.text = string.Format("{0}  {1}  {2}  {3:0.0} m/s",
-                PunchClassifier.TypeName(type), label, isLeft ? "L" : "R", speed);
-    }
-
-    private bool OverlapsAt(Vector3 p)
-    {
-        int n = Physics.OverlapSphereNonAlloc(p, fistRadius, overlapBuf, -1, QueryTriggerInteraction.Collide);
-        for (int i = 0; i < n; i++)
-            if (overlapBuf[i] == hitCollider) return true;
-        return false;
-    }
-
-    private void PushHistory(int h, Vector3 p, float t)
-    {
-        int len = histPos[h].Length;
-        histHead[h] = (histHead[h] + 1) % len;
-        if (histCount[h] < len) histCount[h]++;
-        histPos[h][histHead[h]] = p;
-        histTime[h][histHead[h]] = t;
-    }
-
-    // walks the ring buffer back along the fist path until `dist` meters of travel
-    // are covered; falls back to the oldest sample if the buffer is shorter
-    private Vector3 SampleBackByDistance(int h, float dist, out float t)
-    {
-        int count = histCount[h];
-        int len = histPos[h].Length;
-        int i = histHead[h];
-        Vector3 pos = histPos[h][i];
-        t = histTime[h][i];
-        float acc = 0f;
-        for (int age = 1; age < count; age++)
-        {
-            int j = i - age;
-            while (j < 0) j += len;
-            acc += Vector3.Distance(histPos[h][j], pos);
-            pos = histPos[h][j];
-            t = histTime[h][j];
-            if (acc >= dist) break;
-        }
-        return pos;
+                PunchClassifier.TypeName(type), gameObject.name, isLeft ? "L" : "R", speed);
     }
 
     private void AnimateSquash()

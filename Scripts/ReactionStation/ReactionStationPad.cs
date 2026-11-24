@@ -7,12 +7,13 @@ using UnityEngine;
 [UdonBehaviourSyncMode(BehaviourSyncMode.Manual)]
 public class ReactionStationPad : UdonSharpBehaviour
 {
-    public int padIndex = -1;      // index into the manager's pads array; -1 = START pad
     public bool isStartPad = false;
     public ReactionStationManager manager;
-    public PunchTarget punchTarget;
-    public Renderer padRenderer;
     public string emissionProperty = "_EmissionStrength"; // ToonStandard emission property driven while lit
+
+    [HideInInspector] public int padIndex = -1; // set by the manager from the pads array; -1 = START pad
+    [HideInInspector] public PunchTarget punchTarget;
+    [HideInInspector] public Renderer padRenderer;
 
     private bool lit;
     private float litAt;
@@ -21,7 +22,8 @@ public class ReactionStationPad : UdonSharpBehaviour
     void Start()
     {
         if (punchTarget == null) punchTarget = GetComponent<PunchTarget>();
-        if (!isStartPad) SetLit(false); // the manager lights the START pad itself
+        if (padRenderer == null) padRenderer = GetComponent<Renderer>();
+        SetLit(isStartPad);
     }
 
     public bool IsLit() { return lit; }

@@ -49,12 +49,12 @@ public class ReactionStationManager : UdonSharpBehaviour
     public string hitEvent = "OnHit";
 
     [Header("Results (last completed run)")]
-    public int lastScore;
-    public int lastHits;
-    public float lastAvgReaction;
-    public float lastFastestReaction;
-    public string lastGrade = "";
-    public float lastDuration;
+    [HideInInspector] public int lastScore;
+    [HideInInspector] public int lastHits;
+    [HideInInspector] public float lastAvgReaction;
+    [HideInInspector] public float lastFastestReaction;
+    [HideInInspector] public string lastGrade = "";
+    [HideInInspector] public float lastDuration;
 
     private int state = STATE_IDLE;
     private float readyEndTime;
