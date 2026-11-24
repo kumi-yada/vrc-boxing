@@ -30,49 +30,12 @@ public class BoxPad : UdonSharpBehaviour
     [UdonSynced] private PadPosition padPosition = PadPosition.Jab;
 
     private bool isLeftPad = false;
-    private Collider padCollider;
-
-    void Start()
-    {
-        padCollider = GetComponent<Collider>();
-    }
 
     public void InitializePad(PadPosition position, bool isLeft)
     {
         isActivated = true;
         isLeftPad = isLeft;
         MovePad(position);
-    }
-
-    public Collider GetPadCollider()
-    {
-        if (padCollider == null) padCollider = GetComponent<Collider>();
-        return padCollider;
-    }
-
-    public PadPosition GetPadPosition() { return padPosition; }
-    public bool IsLeftPad() { return isLeftPad; }
-
-    // Called by PunchSystem's swept hit detector on the punching player's
-    // client. Replaces the old OnTriggerEnter, which could miss fast punches
-    // (tunneling) and could double-count one swing.
-    public void NotifyPunchHit(bool isLeftHand, float speed, float score, PunchQuality quality)
-    {
-        if (station == null) return;
-        if (isLeftPad != isLeftHand) return;
-
-        if (!station.isInitialized)
-        {
-            station.PrepareGame(Networking.LocalPlayer);
-            return;
-        }
-
-        if (!Networking.IsOwner(gameObject))
-            return;
-
-        station.PadHit(isLeftPad, speed);
-        // impact sound is played by PunchFeedback at the hit point for every
-        // target (loudness/pitch follow punch speed), so it is not played here
     }
 
     public void MovePad(PadPosition position)
